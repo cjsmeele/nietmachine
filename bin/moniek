@@ -1,0 +1,138 @@
+#!/usr/bin/env perl
+
+# Copyright (c) 2016 Chris Smeele
+# 
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+# 
+# The above copyright notice and this permission notice shall be included in
+# all copies or substantial portions of the Software.
+# 
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+# THE SOFTWARE.
+
+use 5.12.0;
+use warnings;
+use autodie qw/ open opendir /;
+
+use List::Util qw/ reduce /;
+
+$0 = "moniek";
+$| = 1;
+
+sub set_handlers {
+    $SIG{INT}  = $SIG{TERM} = $SIG{HUP} = $SIG{PIPE} = $SIG{CHLD} = \&cleanup;
+    #$SIG{USR1} = \&reload;
+}
+sub unset_handlers {
+    $SIG{INT}  = $SIG{TERM} = $SIG{HUP} = "DEFAULT";
+    $SIG{PIPE} = "IGNORE";
+    $SIG{CHLD} = "IGNORE";
+}
+
+sub init {
+    set_handlers;
+}
+
+sub cleanup {
+    my $sig  = shift // '';
+    my $soft = shift // 0;
+
+    unless ($soft) {
+        exit;
+    }
+}
+
+sub slurp {
+    open my $fh, '<', shift;
+    <$fh>;
+}
+
+sub dir {
+    opendir my $dh, shift;
+    readdir $dh;
+}
+
+sub get_usage_cpu {
+
+    state %prev_jiffies;
+
+    my %jiffies = map {
+        if (/^(cpu\d*) \s+ ((?:\d+\s+){2}) ((?:\d+(?:\s+|$))+)/x) {
+            $1 => {
+                busy  => (reduce { $a + $b } split /\s+/, $2),
+                idle  => (reduce { $a + $b } split /\s+/, $3),
+                total => (reduce { $a + $b } split /\s+/, $2 . $3),
+            }
+        } else {
+            ()
+        }
+    } grep /^cpu/, slurp "/proc/stat";
+
+    if (keys %prev_jiffies) {
+        my %jiffie_diff = map {
+            return () unless exists $prev_jiffies{$_};
+            my $j  = $jiffies{$_};
+            my $pj = $prev_jiffies{$_};
+            $_ => {
+                map {
+                    $_ => $j->{$_} - $pj->{$_}
+                } keys %$j
+            }
+        } keys %jiffies;
+
+        %prev_jiffies = %jiffies;
+
+        return join ':', map {
+            sprintf "%s=%.4f", $_, $jiffie_diff{$_}->{busy} / $jiffie_diff{$_}->{total}
+        } sort keys %jiffie_diff;
+    } else {
+        %prev_jiffies = %jiffies;
+        return;
+    }
+}
+
+sub get_usage_mem {
+    open my $m, '<', "/proc/meminfo";
+
+    my %mem;
+    @mem{qw/ total free available buffers cached /} = map {
+        s/\D//gr
+    } <$m>, <$m>, <$m>, <$m>, <$m>;
+
+    return sprintf "mem=%.4f", ($mem{total} - ($mem{free} + $mem{buffers} + $mem{cached})) / $mem{total};
+}
+
+sub get_usage_bat {
+    my $ps = "/sys/class/power_supply";
+
+    return join ":", map {
+        sprintf "%s=%.4f", (lc $_), slurp("$ps/$_/energy_now") / slurp("$ps/$_/energy_full");
+    } grep /^BAT/i, dir $ps;
+}
+
+sub get_power_status {
+    my $ps = "/sys/class/power_supply";
+
+    return join ":", map {
+        sprintf "%s=%d", (lc $_), slurp("$ps/$_/online");
+    } grep /^ACAD/i, dir $ps;
+}
+
+init;
+
+for (;;) {
+    say join ':', (get_usage_cpu), (get_usage_mem), (get_usage_bat), (get_power_status);
+    select undef, undef, undef, 1.0;
+}
+
+cleanup;

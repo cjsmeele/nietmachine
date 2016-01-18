@@ -1,0 +1,360 @@
+#!/usr/bin/env perl
+
+# Copyright (c) 2016 Chris Smeele
+# 
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+# 
+# The above copyright notice and this permission notice shall be included in
+# all copies or substantial portions of the Software.
+# 
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+# THE SOFTWARE.
+
+use 5.12.0;
+use warnings;
+use autodie qw/ open /;
+
+use List::Util qw/ reduce /;
+use IO::Select;
+use POSIX qw/ strftime /;
+
+# Allow for easy pkill-ing
+$0 = "barteld";
+
+my $wm_padding = 0;
+
+# Hash to store PIDs of piped processes we depend on.
+my %children;
+
+# Pipe handles.
+my $wm_feed;
+my $moniek;
+my $panel;
+
+my $select;
+
+my %report;
+my @monitors;
+my $focused_monitor;
+
+my %moniek;
+
+sub set_handlers {
+    $SIG{INT}  = $SIG{TERM} = $SIG{HUP} = $SIG{PIPE} = $SIG{CHLD} = \&cleanup;
+    $SIG{USR1} = \&reload;
+}
+sub unset_handlers {
+    $SIG{INT}  = $SIG{TERM} = $SIG{HUP} = "DEFAULT";
+    $SIG{PIPE} = "IGNORE";
+    $SIG{CHLD} = "IGNORE";
+}
+
+sub parse_geom {
+    return sub {
+        width  => (int $_[0]),
+        height => (int $_[1]),
+        x      => (int $_[2]),
+        y      => (int $_[3]),
+    }->($_[0] =~ /(\d+)x(\d+)([+-]\d+)([+-]\d+)/);
+}
+
+sub sort_monitors {
+    @monitors = sort {
+           $a->{y} <=> $b->{y}
+        or $a->{x} <=> $b->{x}
+    } @monitors;
+}
+
+sub init {
+    set_handlers;
+
+    %children = (
+        feed_pid   => open($wm_feed, "-|", "bspc",
+            subscribe => "report", "monitor",
+        ),
+        moniek_pid => open($moniek, "-|", "moniek"),
+        panel_pid  => open($panel,  "|-", "lemonbar",
+            -B => "#101010",
+            -F => "#888",
+            -g => "x18",
+            -f =>  "Terminus:bold:size=12",
+            -f => "Monospace:bold:size=12",
+            -f =>      "Mona:bold:size=12",
+            -o => 0
+            # TODO: Fetch above options from a config file.
+        ),
+    );
+
+    system "bspc", config => top_padding => ($wm_padding = 18);
+
+    $wm_feed->autoflush(1);
+    $moniek->autoflush(1);
+    $panel->autoflush(1);
+
+    $select = IO::Select->new($wm_feed, $moniek);
+
+    # Fill initial monitor list.
+    @monitors = ();
+    chomp (my @mon_names = `bspc query -M`);
+    my @xrandr = `xrandr`; # This should be faster than parsing `bspc query -T`'s JSON output.
+    foreach my $name (@mon_names) {
+        my ($xrline) = grep /^\Q$name\E connected/, @xrandr;
+        if ($xrline =~ /^\Q$name\E connected (\S+)/) {
+            push @monitors, { name => $name, parse_geom($1) };
+        }
+    }
+    sort_monitors;
+}
+
+sub reload {
+    say STDERR "Reloading $0";
+
+    sleep (shift) if $_[0] =~ /^\d+$/;
+
+    unset_handlers;
+    cleanup(undef, "soft");
+    init;
+}
+
+sub cleanup {
+    my $sig  = shift // '';
+    my $soft = shift // 0;
+
+    # Ignore the death of a child if it's not one of our long-running pipes.
+    return if $sig eq 'CHLD'
+          and kill(ZERO => values %children) == values %children;
+
+    # Kill any remaining children.
+    kill ZERO => $_ and kill HUP => $_
+        for (values %children);
+
+    close $wm_feed if defined $wm_feed;
+    close $panel   if defined $panel;
+    close $moniek  if defined $moniek;
+
+    unless ($soft) {
+        system "bspc", config => top_padding => ($wm_padding = 0)
+            if $wm_padding;
+        exit;
+    }
+}
+
+sub parse_report {
+
+    local $_ = shift;
+    s/^W//;
+
+    my %info = (
+        monitors         => {},
+        have_active_node => 0,
+    );
+    my $monitor;
+    foreach (split /:/) {
+        if (/^([Mm])(.+)/i) {
+            $info{monitors}->{$monitor->{name}} = $monitor
+                if defined $monitor;
+
+            $monitor = {
+                name   => $2,
+                focus  => ($1 eq 'M'),
+                desks  => [],
+                layout => undef,
+            };
+        } elsif (/^([ufo])(.+)/i) {
+            push @{$monitor->{desks}}, {
+                name   => $2,
+                focus  => ($1 eq uc $1),
+                urgent => (lc $1 eq 'u'),
+                dirty  => (lc $1 eq 'u' or lc $1 eq 'o'),
+            };
+        } elsif (/^L([TM])/) {
+            $monitor->{layout} = $1;
+        } elsif (/^T([TFP])/) {
+            $info{have_active_node} = 1;
+        }
+    }
+
+    $info{monitors}->{$monitor->{name}} = $monitor
+        if defined $monitor;
+
+    %report = %info;
+}
+
+sub parse_monitor {
+    local $_ = shift;
+
+    if (/^monitor_focus (.+)$/) {
+        $focused_monitor = $1;
+
+    } elsif (/^monitor_add (.+?) 0x\S+ (\S+)$/) {
+        push @monitors, { name => $1, parse_geom($2) };
+        sort_monitors;
+
+    } elsif (/^monitor_remove (.+)$/) {
+        @monitors = grep { $_->{name} ne $1 } @monitors;
+
+    } elsif (/^monitor_rename (.+?) (.+?)$/) {
+        my ($mon) = grep { $_->{name} eq $1 } @monitors;
+        die unless defined $mon;
+        $mon->{name} = $2;
+
+    } elsif (/^monitor_geometry (.+?) (\S+)$/) {
+        my ($mon) = grep { $_->{name} eq $1 } @monitors;
+        my %geom  = parse_geom $2;
+
+        @{$mon}{keys %geom} = values %geom;
+        sort_monitors;
+    }
+}
+
+sub parse_moniek {
+    local $_ = shift;
+
+    %moniek = map { my ($k,$v) = split /=/; $k => 0+$v } split /:/;
+}
+
+sub snackbar {
+    my $color = shift;
+    my $ratio = shift;
+
+    my @bars = qw( ▁ ▂ ▃ ▄ ▅ ▆ ▇ █ );
+    my %ranges = (
+        critical => {
+             0 => "#ff0000", # 0 to 12%
+            12 => "#f0b000",
+            20 => "#d0c000",
+            32 => "#a0d000",
+            70 => "#70d000", # 70% and above.
+        },
+    );
+
+    return sprintf "%%{B-}%%{F%s}%s%%{F-}%%{B-}",
+        (exists $ranges{$color})
+            ? sub {
+                for (reverse sort keys %{$ranges{$color}}) {
+                    return $ranges{$color}->{$_} if $ratio*100 >= $_;
+                }
+                return "-";
+              }->()
+            : $color,
+        $bars[$ratio * $#bars];
+}
+
+sub make_bar {
+    my ($mon) = @_;
+
+    my $bar = "%{l}";
+
+    # Per-monitor desk list.
+    foreach my $desk (@{$mon->{desks}}) {
+        if ($desk->{urgent}) {
+            $bar .= "%{B#c00}%{F#fff}";
+        } elsif ($desk->{focus}) {
+            $bar .= $mon->{focus}
+                ? "%{B#005f5f}"
+                : "%{B#444}";
+            $bar .= $desk->{dirty}
+                ? "%{F#fff}"
+                : "%{F#000}";
+        } else {
+            $bar .= $desk->{dirty}
+                ? "%{F-}"
+                : "%{F#000}";
+        }
+
+        $bar .= " $desk->{name} ";
+        $bar .= "%{B-}%{F-}";
+    }
+
+    # Text only for the focused monitor.
+    if ($mon->{focus}) {
+        # Focused window title.
+        if ($report{have_active_node}) {
+            my $title = (`xtitle -t 80` =~ s/\s*\n$//r =~ s/^\s*//r);
+            $bar .= "%{c}  $title  " if length $title;
+        }
+
+        # Status text.
+        $bar .= "%{r} ";
+
+        my $bat = reduce { $a + $b } map { $moniek{$_} } grep /^bat\d*$/, keys %moniek;
+
+        if (
+                defined $bat and $bat <= 0.12
+            and (not exists($moniek{acad}) or not $moniek{acad})
+        ) {
+            $bar .= "%{B#f00}%{F#fff} BAT %{F-}%{B-} ";
+        } elsif (exists($moniek{acad}) and $moniek{acad}) {
+            $bar .= "%{B-}%{F#ff0}⚡%{F-}%{B-} ";
+        }
+
+        my $indicators;
+
+        #$indicators .= (snackbar "#00b0d0",  $moniek{cpu}) if exists $moniek{cpu};
+        $indicators .= (snackbar "#00b0d0",  $moniek{$_})  for sort grep /cpu\d+/,   keys %moniek;
+        $indicators .= (snackbar "#e0d000",  $moniek{mem}) if exists $moniek{mem};
+        $indicators .= (snackbar "critical", $moniek{$_})  for sort grep /^bat\d*$/, keys %moniek;
+
+        $bar .= "$indicators " if defined $indicators;
+
+        $bar .= strftime "wk %-V, %a %%{F#fafafa}%-d%%{F-} %b %Y %%{F#fafafa}%-H%%{F-}:%%{F#fafafa}%M ", localtime;
+    }
+
+    $bar .= "%{B-}%{F-}";
+
+    return $bar;
+}
+
+init;
+
+outer: for (;;) {
+    foreach my $fh ($select->can_read(0.5)) {
+        if ($fh == $wm_feed) {
+            my $read = sysread $fh, my $input, 4*1024;
+            reload 2 if $read == 4*1024;
+
+            last outer unless $read;
+
+            for (split /\n/, $input) {
+                if (/^W/) {
+                    parse_report $_;
+                } elsif (/^monitor_/) {
+                    parse_monitor $_;
+                } else {
+                    say "WHAT: $_";
+                }
+            }
+        } elsif ($fh == $moniek) {
+            my $read = sysread $fh, my $input, 4*1024;
+            reload 2 if $read == 4*1024;
+
+            last outer unless $read;
+            for (split /\n/, $input) {
+                parse_moniek $_;
+            }
+        }
+    }
+    if (keys %report) {
+        my @m = map { $_->{name} } @monitors;
+        print $panel "%{Sf}";
+        foreach my $mon (@{$report{monitors}}{@m}) {
+            print $panel make_bar($mon);
+        } continue {
+            print $panel "%{S+}";
+        }
+    }
+    print $panel "\n";
+
+}
+
+cleanup;

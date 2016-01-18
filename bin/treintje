@@ -1,0 +1,118 @@
+#!/usr/bin/env perl
+
+# Copyright (c) 2016 Chris Smeele
+# 
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+# 
+# The above copyright notice and this permission notice shall be included in
+# all copies or substantial portions of the Software.
+# 
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+# THE SOFTWARE.
+
+use 5.12.0;
+use warnings;
+use autodie qw/ open /;
+
+use IO::Select;
+use JSON qw / decode_json /;
+
+# Allow for easy pkill-ing
+$0 = "treintje";
+
+# Hash to store PIDs of piped processes we depend on.
+my %children;
+
+# Pipe handles.
+my $wm_feed;
+
+my $select;
+
+sub set_handlers {
+    $SIG{INT}  = $SIG{TERM} = $SIG{HUP} = $SIG{PIPE} = $SIG{CHLD} = \&cleanup;
+    $SIG{USR1} = \&reload;
+}
+sub unset_handlers {
+    $SIG{INT}  = $SIG{TERM} = $SIG{HUP} = "DEFAULT";
+    $SIG{PIPE} = "IGNORE";
+    $SIG{CHLD} = "IGNORE";
+}
+
+sub init {
+    set_handlers;
+
+    %children = (
+        feed_pid  => open($wm_feed, "-|", "bspc",
+            subscribe => "report", "node_manage",
+        ),
+    );
+
+    $wm_feed->autoflush(1);
+
+    $select = IO::Select->new($wm_feed);
+}
+
+sub reload {
+    say STDERR "Reloading $0";
+
+    sleep (shift) if $_[0] =~ /^\d+$/;
+
+    unset_handlers;
+    cleanup(undef, "soft");
+    init;
+}
+
+sub cleanup {
+    my $sig  = shift // '';
+    my $soft = shift // 0;
+
+    # Ignore the death of a child if it's not one of our long-running pipes.
+    return if $sig eq 'CHLD'
+          and kill(ZERO => values %children) == values %children;
+
+    # Kill any remaining children.
+    kill ZERO => $_ and kill HUP => $_
+        for (values %children);
+
+    close $wm_feed if defined $wm_feed;
+
+    unless ($soft) {
+        exit;
+    }
+}
+
+init;
+
+for (;;) {
+    my $fh = [$select->can_read(0.5)]->[0];
+    if (defined $fh) {
+        my $read = sysread $fh, my $input, 4*1024;
+        reload 2 if $read == 4*1024;
+
+        last unless $read;
+
+        for (split /\n/, $input) {
+            if (/^node_manage .+ .+ (0x[0-9A-Za-z]+) .+$/) {
+                chomp(my $json = `bspc query -T -n $1`);
+                eval {
+                    my $node = decode_json $json;
+
+                    system "transset", -i => $node->{id}, 0.9
+                        if (lc $node->{client}->{className}) eq "urxvt";
+                }
+            }
+        }
+    }
+}
+
+cleanup;
