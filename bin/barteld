@@ -247,7 +247,7 @@ sub snackbar {
                 return "-";
               }->()
             : $color,
-        $bars[$ratio * $#bars];
+        $bars[$ratio * $#bars + 0.5];
 }
 
 sub make_bar {
