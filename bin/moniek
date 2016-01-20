@@ -30,13 +30,12 @@ $0 = "moniek";
 $| = 1;
 
 sub set_handlers {
-    $SIG{INT}  = $SIG{TERM} = $SIG{HUP} = $SIG{PIPE} = $SIG{CHLD} = \&cleanup;
-    #$SIG{USR1} = \&reload;
+    $SIG{INT}  = $SIG{TERM} = $SIG{HUP} = $SIG{PIPE} = \&cleanup;
+    $SIG{CHLD} = "IGNORE";
 }
 sub unset_handlers {
     $SIG{INT}  = $SIG{TERM} = $SIG{HUP} = "DEFAULT";
     $SIG{PIPE} = "IGNORE";
-    $SIG{CHLD} = "IGNORE";
 }
 
 sub init {
@@ -59,7 +58,7 @@ sub slurp {
 
 sub dir {
     opendir my $dh, shift;
-    readdir $dh;
+    grep !/^\./, readdir $dh;
 }
 
 sub get_usage_cpu {
@@ -128,10 +127,18 @@ sub get_power_status {
     } grep /^ACAD/i, dir $ps;
 }
 
+sub get_wifi_status {
+    if (`iwconfig 2>/dev/null` =~ /^\s+Link Quality=(\d+)\/(\d+)/m) {
+        # Support just one wireless card for now.
+        return sprintf "%s=%.4f", "wlan_quality", $1 / $2;
+    }
+    return;
+}
+
 init;
 
 for (;;) {
-    say join ':', (get_usage_cpu), (get_usage_mem), (get_usage_bat), (get_power_status);
+    say join ':', (get_usage_cpu), (get_usage_mem), (get_usage_bat), (get_power_status), (get_wifi_status);
     select undef, undef, undef, 1.0;
 }
 

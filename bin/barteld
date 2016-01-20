@@ -304,6 +304,7 @@ sub make_bar {
         $indicators .= (snackbar "#00b0d0",  $moniek{$_})  for sort grep /cpu\d+/,   keys %moniek;
         $indicators .= (snackbar "#e0d000",  $moniek{mem}) if exists $moniek{mem};
         $indicators .= (snackbar "critical", $moniek{$_})  for sort grep /^bat\d*$/, keys %moniek;
+        $indicators .= (snackbar "#c9074c",  $moniek{wlan_quality}) if exists $moniek{wlan_quality};
 
         $bar .= "$indicators " if defined $indicators;
 
