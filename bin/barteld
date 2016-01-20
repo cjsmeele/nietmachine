@@ -33,6 +33,8 @@ $0 = "barteld";
 
 my $wm_padding = 0;
 
+my $enabled = 0;
+
 # Hash to store PIDs of piped processes we depend on.
 my %children;
 
@@ -52,6 +54,7 @@ my %moniek;
 sub set_handlers {
     $SIG{INT}  = $SIG{TERM} = $SIG{HUP} = $SIG{PIPE} = $SIG{CHLD} = \&cleanup;
     $SIG{USR1} = \&reload;
+    $SIG{USR2} = \&toggle;
 }
 sub unset_handlers {
     $SIG{INT}  = $SIG{TERM} = $SIG{HUP} = "DEFAULT";
@@ -90,7 +93,8 @@ sub init {
             -f =>  "Terminus:bold:size=12",
             -f => "Monospace:bold:size=12",
             -f =>      "Mona:bold:size=12",
-            -o => 0
+            -o => 0,
+            -a => 20,
             # TODO: Fetch above options from a config file.
         ),
     );
@@ -114,6 +118,8 @@ sub init {
         }
     }
     sort_monitors;
+
+    $enabled = 1;
 }
 
 sub reload {
@@ -124,6 +130,18 @@ sub reload {
     unset_handlers;
     cleanup(undef, "soft");
     init;
+}
+
+sub toggle {
+    $enabled = !$enabled;
+    unless ($enabled) {
+        unset_handlers;
+        cleanup(undef, "soft");
+        system "bspc", config => top_padding => ($wm_padding = 0)
+            if $wm_padding;
+    } else {
+        init;
+    }
 }
 
 sub cleanup {
@@ -319,6 +337,10 @@ sub make_bar {
 init;
 
 outer: for (;;) {
+    unless ($enabled) {
+        sleep 1;
+        next;
+    }
     foreach my $fh ($select->can_read(0.5)) {
         if ($fh == $wm_feed) {
             my $read = sysread $fh, my $input, 4*1024;
