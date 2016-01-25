@@ -137,8 +137,27 @@ sub get_wifi_status {
 
 init;
 
+my %COMPONENT_SETS = (
+    all       => [ \&get_usage_cpu, \&get_usage_mem, \&get_usage_bat, \&get_power_status, \&get_wifi_status ],
+    laptop    => [ \&get_usage_cpu, \&get_usage_mem, \&get_usage_bat, \&get_power_status, \&get_wifi_status ],
+    desktop   => [ \&get_usage_cpu, \&get_usage_mem ],
+    resources => [ \&get_usage_cpu, \&get_usage_mem ],
+    cpu       => [ \&get_usage_cpu   ],
+    mem       => [ \&get_usage_mem   ],
+    wifi      => [ \&get_wifi_status ],
+    power     => [ \&get_usage_bat, \&get_power_status ],
+);
+
+my @components;
+if (@ARGV) {
+    my $set = $COMPONENT_SETS{$ARGV[0]} or die "No such component set";
+    @components = @$set;
+} else {
+    @components = @{$COMPONENT_SETS{all}};
+}
+
 for (;;) {
-    say join ':', (get_usage_cpu), (get_usage_mem), (get_usage_bat), (get_power_status), (get_wifi_status);
+    say join ':', map { $_->() } @components;
     select undef, undef, undef, 1.0;
 }
 
