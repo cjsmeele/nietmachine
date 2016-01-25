@@ -24,6 +24,11 @@ information and a clock. The panel used in this setup is
 Moniek is a utility that periodically prints CPU and memory usage
 statistics, and battery / adapter status to standard output.
 
+### Batman
+
+Batman watches over your battery levels and will shout at you when it's
+getting too low.
+
 ### Treintje
 
 Treintje listens for bspwm `node_manage` events and automatically sets
