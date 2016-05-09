@@ -311,7 +311,7 @@ sub make_bar {
                 defined $bat and $bat <= 0.12
             and (not exists($moniek{acad}) or not $moniek{acad})
         ) {
-            $bar .= "%{B#f00}%{F#fff} BAT %{F-}%{B-} ";
+            $bar .= "%{B#f00}%{F#fff} BAT " . int($bat * 100) . " % %{F-}%{B-} ";
         } elsif (exists($moniek{acad}) and $moniek{acad}) {
             $bar .= "%{B-}%{F#ff0}⚡%{F-}%{B-} ";
         }
