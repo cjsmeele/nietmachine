@@ -1,17 +1,17 @@
 #!/usr/bin/env perl
 
 # Copyright (c) 2016 Chris Smeele
-# 
+#
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
 # in the Software without restriction, including without limitation the rights
 # to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
 # copies of the Software, and to permit persons to whom the Software is
 # furnished to do so, subject to the following conditions:
-# 
+#
 # The above copyright notice and this permission notice shall be included in
 # all copies or substantial portions of the Software.
-# 
+#
 # THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 # IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
 # FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
@@ -22,6 +22,7 @@
 
 use 5.12.0;
 use warnings;
+#use utf8;
 use autodie qw/ open /;
 
 use List::Util qw/ reduce /;
@@ -87,23 +88,65 @@ sub init {
         ),
         moniek_pid => open($moniek, "-|", "moniek"),
         panel_pid  => open($panel,  "|-", "lemonbar",
-            -B => "#101010",
-            -F => "#888",
-            -g => "x18",
-            -f =>  "Terminus:bold:size=12",
-            -f => "Monospace:bold:size=12",
-            -f =>      "Mona:bold:size=12",
-            -o => 0,
             -a => 20,
+            #-B => "#101010",
+            #-F => "#888",
+            #-B => "#eee", # black on white
+            #-F => "#222",
+            #-B => "#0c0c0c",  # white on black
+            #-B => "#0c0c0c",  # white on black
+            #-F => "#b7b7b7",
+            #-B => "#0c2c2c",
+            #-B => "#2f0c1a",
+            -B => "#4f0c1a",
+            -F => "#b7b7b7",
+            #-g => "x18",
+            #-g => "x22",
+            #-o => 0,
+            #-f =>  "Georgia:bold:size=12",
+            #-f =>  "Source Sans Pro:size=12",
+            #-f =>  "Terminus:bold:size=12",
+            #-f => "Monospace:bold:size=12",
+            #-f =>      "Mona:bold:size=12",
+            #-f =>  "Source Code Pro:size=12",
+            #-f => "Monospace:bold:size=12",
+            #-f =>      "Mona:bold:size=12",
+            #-g => "x12",
+            #-f =>  "PxPlus IBM BIOS:pixelsize=8:antialias=false:hinting=false",
+            #-f => "Monospace:bold:pixelsize=8",
+            #-f =>      "Mona:bold:pixelsize=8",
+            #-o => 0,
+            #-g => "x20",
+            #-f =>  "PxPlus IBM VGA8:pixelsize=16:antialias=false:hinting=false",
+            #-f => "Monospace:bold:pixelsize=16",
+            #-f =>      "Mona:bold:pixelsize=16",
+            #-o => 0,
+            #-g => "x20",
+            #-g => "x16",
+            -g => "x13",
+            #-f =>  "PxPlus IBM BIOS:pixelsize=16:antialias=false:hinting=false",
+            #-f =>  "PxPlus IBM VGA8:pixelsize=16:antialias=false:hinting=false",
+            #-f =>  "PxPlus Amstrad PC1512:pixelsize=16:antialias=false:hinting=false",
+            -f =>  "PxPlus IBM EGA8:pixelsize=16:antialias=false:hinting=false",
+            -f => "Monospace:bold:pixelsize=16",
+            -f =>      "Mona:bold:pixelsize=16",
+            -o => -1,
+            #-g => "x16",
+            #-f =>  "PxPlus IBM BIOS:pixelsize=16:antialias=false:hinting=false",
+            #-f => "Monospace:bold:pixelsize=16",
+            #-f =>      "Mona:bold:pixelsize=16",
+            #-o => -1,
             # TODO: Fetch above options from a config file.
         ),
     );
 
-    system "bspc", config => top_padding => ($wm_padding = 18);
+    system "bspc", config => top_padding => ($wm_padding = 13);
 
-    $wm_feed->autoflush(1);
-    $moniek->autoflush(1);
-    $panel->autoflush(1);
+
+
+    $wm_feed->autoflush(1); #binmode $wm_feed, ":encoding(utf8)";
+    $moniek->autoflush(1);  #binmode $moniek,  ":encoding(utf8)";
+    $panel->autoflush(1);   #binmode $panel,   ":encoding(utf8)";
 
     $select = IO::Select->new($wm_feed, $moniek);
 
@@ -177,6 +220,8 @@ sub parse_report {
         have_active_node => 0,
     );
     my $monitor;
+
+    #say STDERR $_;
     foreach (split /:/) {
         if (/^([Mm])(.+)/i) {
             $info{monitors}->{$monitor->{name}} = $monitor
@@ -245,7 +290,8 @@ sub snackbar {
     my $color = shift;
     my $ratio = shift;
 
-    my @bars = qw( ▁ ▂ ▃ ▄ ▅ ▆ ▇ █ );
+    #my @bars = qw( ▁ ▂ ▃ ▄ ▅ ▆ ▇ █ );
+    my @bars = (' ', qw( ▁ ▄ ▄ █ █ ));
     my %ranges = (
         critical => {
              0 => "#ff0000", # 0 to 12%
@@ -274,48 +320,61 @@ sub make_bar {
     my $bar = "%{l}";
 
     # Per-monitor desk list.
-    foreach my $desk (@{$mon->{desks}}) {
-        if ($desk->{urgent}) {
-            $bar .= "%{B#c00}%{F#fff}";
-        } elsif ($desk->{focus}) {
-            $bar .= $mon->{focus}
-                ? "%{B#005f5f}"
-                : "%{B#444}";
-            $bar .= $desk->{dirty}
-                ? "%{F#fff}"
-                : "%{F#000}";
-        } else {
-            $bar .= $desk->{dirty}
-                ? "%{F-}"
-                : "%{F#000}";
-        }
+    if (0) {
+        foreach my $desk (@{$mon->{desks}}) {
+            if ($desk->{urgent}) {
+                $bar .= "%{B#c00}%{F#fff}";
+            } elsif ($desk->{focus}) {
+                $bar .= $mon->{focus}
+                    #? "%{B#005f5f}"
+                    #? "%{B#af0000}"
+                    #? "%{B#42cfd3}"
+                    ? "%{B#2ab9b9}"
+                    : "%{B#444}";
+                $bar .= $desk->{dirty}
+                    ? "%{F#000}"
+                    : "%{F#fff}";
+            } else {
+                $bar .= $desk->{dirty}
+                    ? "%{F-}"
+                    #: "%{F#000}";
+                    : "%{F#aaa}";
+            }
 
-        $bar .= " $desk->{name} ";
-        $bar .= "%{B-}%{F-}";
+            $bar .= " $desk->{name} ";
+            $bar .= "%{B-}%{F-}";
+        }
+        $bar .= "%{c}";
+    } else {
+        #$bar .= " ";
+        $bar .= "%{F#000000}%{B#aaaaaa}";
+        $bar .= $mon->{layout} eq "M" ? "↑" : " ";
+        my @focused_is;
+        $mon->{desks}->[$_]->{focus} && push @focused_is, $_+1
+            for 0..$#{$mon->{desks}};
+        $bar .= join ',', @focused_is;
+        $bar .= " %{F-}%{B-}";
     }
+
+    my $title_len = 0;
 
     # Text only for the focused monitor.
     if ($mon->{focus}) {
         # Focused window title.
         if ($report{have_active_node}) {
             my $title = (`xtitle -t 80` =~ s/\s*\n$//r =~ s/^\s*//r);
-            $bar .= "%{c}  $title  " if length $title;
+            #my $title = (`xtitle -t 40` =~ s/\s*\n$//r =~ s/^\s*//r);
+            #$bar .= " %{B#2ab9b9} $title %{B-} " if length $title;
+            #$bar .= " %{F#2ab9b9}%{B#2ab9b9}%{F#000000}► $title %{B-}%{F#2ab9b9}►%{F-} " if length $title;
+            #$bar .= " %{F#2ab9b9}▒%{B#2ab9b9}%{F#000000} $title %{B-}%{F#2ab9b9}▒%{F-} " if length $title;
+            $bar .= " %{F#ffffff}$title%{F-} " if length $title;
+
+            $title_len = length $title;
         }
 
-        # Status text.
         $bar .= "%{r} ";
 
-        my $bat = reduce { $a + $b } map { $moniek{$_} } grep /^bat\d*$/, keys %moniek;
-
-        if (
-                defined $bat and $bat <= 0.12
-            and (not exists($moniek{acad}) or not $moniek{acad})
-        ) {
-            $bar .= "%{B#f00}%{F#fff} BAT " . int($bat * 100) . " % %{F-}%{B-} ";
-        } elsif (exists($moniek{acad}) and $moniek{acad}) {
-            $bar .= "%{B-}%{F#ff0}⚡%{F-}%{B-} ";
-        }
-
+        # Bar-shaped indicators.
         my $indicators;
 
         #$indicators .= (snackbar "#00b0d0",  $moniek{cpu}) if exists $moniek{cpu};
@@ -326,7 +385,49 @@ sub make_bar {
 
         $bar .= "$indicators " if defined $indicators;
 
-        $bar .= strftime "wk %-V, %a %%{F#fafafa}%-d%%{F-} %b %Y %%{F#fafafa}%-H%%{F-}:%%{F#fafafa}%M ", localtime;
+        # Status icons.
+        my $statuses;
+
+        # - battery
+
+        my $bat = reduce { $a + $b } map { $moniek{$_} } grep /^bat\d*$/, keys %moniek;
+
+        if (defined $bat and $bat <= 0.12
+            and (not exists($moniek{acad}) or not $moniek{acad})) {
+            $statuses .= "%{B#f00}%{F#fff} BAT " . int($bat * 100) . " % %{F-}%{B-} ";
+        } elsif (exists($moniek{acad}) and $moniek{acad}) {
+            #$bar .= "%{B-}%{F#ff0}\N{HIGH VOLTAGE SIGN}%{F-}%{B-} ";
+            #$statuses .= "%{B-}%{F#eb0}Ĩ%{F-}%{B-}";
+            $statuses .= "Ė";
+        }
+
+        # - music
+
+        if (!system("mpc | grep -q playing")) {
+            #$statuses .= "\N{BEAMED EIGHTH NOTES}"; # ♫
+            $statuses .= "♫"; # ♫
+        }
+
+        #$bar .= "$statuses ◄♦☺▒ " if defined $statuses;
+        $bar .= "$statuses " if defined $statuses;
+
+        # Clock.
+
+        $bar .= "%{F#000000}%{B#aaaaaa}";
+        #$bar .= " %{F-}%{B-}";
+
+        #my $fcolor = "#2ab9b9";
+        #my $fcolor = "#ffffff";
+        my $fcolor  = "#550000";
+        my $fcolor2 = "#000000";
+        #2ab9b9
+        #42cfd3
+        #128fa3
+        #$bar .= strftime "wk %-V, %a %%{F#fafafa}%-d%%{F-} %b %Y %%{F#fafafa}%-H%%{F-}:%%{F#fafafa}%M ", localtime;
+        #$bar .= strftime "wk %-V, %a %%{F#42cfd3}%-d%%{F-} %b %Y %%{F#42cfd3}%-H%%{F-}:%%{F#42cfd3}%M ", localtime;
+        $bar .= strftime " wk %-V, %a %%{F$fcolor}%-d%%{F$fcolor2} %b %Y %%{F$fcolor}%-H%%{F$fcolor2}:%%{F$fcolor}%M ", localtime;
+
+        #$bar .= " %{B#aa0}%{F#ff4} Idlers: " . (grep /cpu\d+/ && $moniek{$_} < 0.10, keys %moniek) . " ";
     }
 
     $bar .= "%{B-}%{F-}";
@@ -367,6 +468,9 @@ outer: for (;;) {
             }
         }
     }
+
+    #use Data::Dump; dd \%report;
+
     if (keys %report) {
         my @m = map { $_->{name} } @monitors;
         print $panel "%{Sf}";
