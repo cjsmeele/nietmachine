@@ -1,6 +1,6 @@
 #!/usr/bin/env perl
 
-# Copyright (c) 2016 Chris Smeele
+# Copyright (c) 2016, 2017 Chris Smeele
 #
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -22,7 +22,6 @@
 
 use 5.12.0;
 use warnings;
-#use utf8;
 use autodie qw/ open /;
 
 use List::Util qw/ reduce /;
@@ -63,20 +62,21 @@ sub unset_handlers {
     $SIG{CHLD} = "IGNORE";
 }
 
-sub parse_geom {
-    return sub {
-        width  => (int $_[0]),
-        height => (int $_[1]),
-        x      => (int $_[2]),
-        y      => (int $_[3]),
-    }->($_[0] =~ /(\d+)x(\d+)([+-]\d+)([+-]\d+)/);
+# My List::MoreUtils is too old for zip6 apparently.
+sub zip {
+    my @r;
+    for (my $i = 0;; $i++) {
+        last unless grep { $i < @$_ } @_;
+        push @r, [map { $i < @$_ ? $_->[$i] : undef } @_];
+    }
+    @r
 }
 
-sub sort_monitors {
-    @monitors = sort {
-           $a->{y} <=> $b->{y}
-        or $a->{x} <=> $b->{x}
-    } @monitors;
+sub refresh_monitors {
+    @monitors = map {id   => $_->[0] =~ s/\n//r,
+                     name => $_->[1] =~ s/\n//r},
+                zip [`bspc query -M`],
+                    [`bspc query -M --names`];
 }
 
 sub init {
@@ -89,64 +89,18 @@ sub init {
         moniek_pid => open($moniek, "-|", "moniek"),
         panel_pid  => open($panel,  "|-", "lemonbar",
             -a => 20,
-            #-B => "#101010",
-            #-F => "#888",
-            #-B => "#eee", # black on white
-            #-F => "#222",
-            #-B => "#0c0c0c",  # white on black
-            #-B => "#0c0c0c",  # white on black
-            #-F => "#b7b7b7",
-            #-B => "#0c2c2c",
-            #-B => "#2f0c1a",
-            #-B => "#4f0c1a", # Red/white
-            #-F => "#b7b7b7", # II
-            #-B => "#500030", # ...
-            -B => "#0c0c0c", # Black&white
-            -F => "#b7b7b7", # II
-            #-g => "x18",
-            #-g => "x22",
-            #-o => 0,
-            #-f =>  "Georgia:bold:size=12",
-            #-f =>  "Source Sans Pro:size=12",
-            #-f =>  "Terminus:bold:size=12",
-            #-f => "Monospace:bold:size=12",
-            #-f =>      "Mona:bold:size=12",
-            #-f =>  "Source Code Pro:size=12",
-            #-f => "Monospace:bold:size=12",
-            #-f =>      "Mona:bold:size=12",
-            #-g => "x12",
-            #-f =>  "PxPlus IBM BIOS:pixelsize=8:antialias=false:hinting=false",
-            #-f => "Monospace:bold:pixelsize=8",
-            #-f =>      "Mona:bold:pixelsize=8",
-            #-o => 0,
-            #-g => "x20",
-            #-f =>  "PxPlus IBM VGA8:pixelsize=16:antialias=false:hinting=false",
-            #-f => "Monospace:bold:pixelsize=16",
-            #-f =>      "Mona:bold:pixelsize=16",
-            #-o => 0,
-            #-g => "x20",
-            #-g => "x16",
+            -B => "#0c0c0c",
+            -F => "#b7b7b7",
             -g => "x13",
-            #-f =>  "PxPlus IBM BIOS:pixelsize=16:antialias=false:hinting=false",
-            #-f =>  "PxPlus IBM VGA8:pixelsize=16:antialias=false:hinting=false",
-            #-f =>  "PxPlus Amstrad PC1512:pixelsize=16:antialias=false:hinting=false",
             -f =>  "PxPlus IBM EGA8:pixelsize=16:antialias=false:hinting=false",
             -f => "Monospace:bold:pixelsize=16",
             -f =>      "Mona:bold:pixelsize=16",
             -o => -1,
             #'-b'
-            #-g => "x16",
-            #-f =>  "PxPlus IBM BIOS:pixelsize=16:antialias=false:hinting=false",
-            #-f => "Monospace:bold:pixelsize=16",
-            #-f =>      "Mona:bold:pixelsize=16",
-            #-o => -1,
-            # TODO: Fetch above options from a config file.
         ),
     );
 
     system "bspc", config => top_padding => ($wm_padding = 13);
-
-
 
     $wm_feed->autoflush(1); #binmode $wm_feed, ":encoding(utf8)";
     $moniek->autoflush(1);  #binmode $moniek,  ":encoding(utf8)";
@@ -155,16 +109,7 @@ sub init {
     $select = IO::Select->new($wm_feed, $moniek);
 
     # Fill initial monitor list.
-    @monitors = ();
-    chomp (my @mon_names = `bspc query -M`);
-    my @xrandr = `xrandr`; # This should be faster than parsing `bspc query -T`'s JSON output.
-    foreach my $name (@mon_names) {
-        my ($xrline) = grep /^\Q$name\E connected/, @xrandr;
-        if ($xrline =~ /^\Q$name\E connected (?:[a-z]+ )?(\S+)/) {
-            push @monitors, { name => $name, parse_geom($1) };
-        }
-    }
-    sort_monitors;
+    refresh_monitors;
 
     $enabled = 1;
 }
@@ -260,34 +205,12 @@ sub parse_report {
 sub parse_monitor {
     local $_ = shift;
 
-    if (/^monitor_focus (.+)$/) {
-        $focused_monitor = $1;
-
-    } elsif (/^monitor_add (.+?) 0x\S+ (\S+)$/) {
-        push @monitors, { name => $1, parse_geom($2) };
-        sort_monitors;
-
-    } elsif (/^monitor_remove (.+)$/) {
-        @monitors = grep { $_->{name} ne $1 } @monitors;
-
-    } elsif (/^monitor_rename (.+?) (.+?)$/) {
-        my ($mon) = grep { $_->{name} eq $1 } @monitors;
-        die unless defined $mon;
-        $mon->{name} = $2;
-
-    } elsif (/^monitor_geometry (.+?) (\S+)$/) {
-        my ($mon) = grep { $_->{name} eq $1 } @monitors;
-        my %geom  = parse_geom $2;
-
-        @{$mon}{keys %geom} = values %geom;
-        sort_monitors;
-    }
+    refresh_monitors;
 }
 
 sub parse_moniek {
     local $_ = shift;
 
-    #%moniek = map { my ($k,$v) = split /=/; $k => 0+$v } split /:/;
     %moniek = map { my ($k,$v) = split /=/; $k => $v } split /:/;
 }
 
@@ -304,7 +227,8 @@ sub snackbar {
             #20 => "#d0c000",
             #32 => "#a0d000",
             #70 => "#70d000", # 70% and above.
-             0 => "-",
+             0 => "#ff0000",
+            14 => "-",
         },
     );
 
@@ -326,16 +250,13 @@ sub make_bar {
 
     my $bar = "%{l}";
 
-    # Per-monitor desk list.
     if (0) {
+        # Per-monitor desk list (disabled).
         foreach my $desk (@{$mon->{desks}}) {
             if ($desk->{urgent}) {
                 $bar .= "%{B#c00}%{F#fff}";
             } elsif ($desk->{focus}) {
                 $bar .= $mon->{focus}
-                    #? "%{B#005f5f}"
-                    #? "%{B#af0000}"
-                    #? "%{B#42cfd3}"
                     ? "%{B#2ab9b9}"
                     : "%{B#444}";
                 $bar .= $desk->{dirty}
@@ -344,7 +265,6 @@ sub make_bar {
             } else {
                 $bar .= $desk->{dirty}
                     ? "%{F-}"
-                    #: "%{F#000}";
                     : "%{F#aaa}";
             }
 
@@ -353,8 +273,7 @@ sub make_bar {
         }
         $bar .= "%{c}";
     } else {
-        #$bar .= " ";
-        #$bar .= "%{F#000000}%{B#aaaaaa}";
+        # Short current-desk indicator.
         $bar .= $mon->{layout} eq "M" ? "↑" : " ";
         my @focused_is;
         $mon->{desks}->[$_]->{focus} && push @focused_is, $_+1
@@ -370,10 +289,6 @@ sub make_bar {
         # Focused window title.
         if ($report{have_active_node}) {
             my $title = (`xtitle -t 80` =~ s/\s*\n$//r =~ s/^\s*//r);
-            #my $title = (`xtitle -t 40` =~ s/\s*\n$//r =~ s/^\s*//r);
-            #$bar .= " %{B#2ab9b9} $title %{B-} " if length $title;
-            #$bar .= " %{F#2ab9b9}%{B#2ab9b9}%{F#000000}► $title %{B-}%{F#2ab9b9}►%{F-} " if length $title;
-            #$bar .= " %{F#2ab9b9}▒%{B#2ab9b9}%{F#000000} $title %{B-}%{F#2ab9b9}▒%{F-} " if length $title;
             $bar .= " %{F#ffffff}$title%{F-} " if length $title;
 
             $title_len = length $title;
@@ -388,7 +303,6 @@ sub make_bar {
         $indicators .= (snackbar "#00b0d0",  $moniek{$_})  for sort grep /cpu\d+/,   keys %moniek;
         $indicators .= (snackbar "#e0d000",  $moniek{mem}) if exists $moniek{mem};
         $indicators .= (snackbar "critical", $moniek{$_})  for sort grep /^bat\d*$/, keys %moniek;
-        #$indicators .= (snackbar "#c9074c",  $moniek{wlan_quality}) if exists $moniek{wlan_quality};
 
         $bar .= "$indicators " if defined $indicators;
 
@@ -403,43 +317,27 @@ sub make_bar {
             and (not exists($moniek{acad}) or not $moniek{acad})) {
             $statuses .= "%{B#f00}%{F#fff} ACCU " . int($bat * 100) . " % %{F-}%{B-} ";
         } elsif (exists($moniek{acad}) and $moniek{acad}) {
-            #$bar .= "%{B-}%{F#ff0}\N{HIGH VOLTAGE SIGN}%{F-}%{B-} ";
-            #$statuses .= "%{B-}%{F#eb0}Ĩ%{F-}%{B-}";
             $statuses .= "Ė";
         }
 
-        #$statuses .= '¥' if exists $moniek{wlan_quality};
         $statuses .= '¥' if grep /^ip_addr_wlan/, keys %moniek;
         $statuses .= 'ē' if grep /^ip_addr_eth/,  keys %moniek;
 
         # - music
 
         if (!system("mpc | grep -q playing")) {
-            #$statuses .= "\N{BEAMED EIGHTH NOTES}"; # ♫
             $statuses .= "♫"; # ♫
         }
 
-        #$bar .= "$statuses ◄♦☺▒ " if defined $statuses;
         $bar .= "$statuses " if defined $statuses;
 
         # Clock.
 
-        #$bar .= "%{F#000000}%{B#aaaaaa}";
         $bar .= " %{F-}%{B-}";
 
-        #my $fcolor = "#2ab9b9";
         my $fcolor = "#ffffff";
-        #my $fcolor  = "#550000";
-        #my $fcolor  = "#000000";
         my $fcolor2 = "-";
-        #2ab9b9
-        #42cfd3
-        #128fa3
-        #$bar .= strftime "wk %-V, %a %%{F#fafafa}%-d%%{F-} %b %Y %%{F#fafafa}%-H%%{F-}:%%{F#fafafa}%M ", localtime;
-        #$bar .= strftime "wk %-V, %a %%{F#42cfd3}%-d%%{F-} %b %Y %%{F#42cfd3}%-H%%{F-}:%%{F#42cfd3}%M ", localtime;
         $bar .= strftime " wk %-V, %a %%{F$fcolor}%-d%%{F$fcolor2} %b %Y %%{F$fcolor}%-H%%{F$fcolor2}:%%{F$fcolor}%M ", localtime;
-
-        #$bar .= " %{B#aa0}%{F#ff4} Idlers: " . (grep /cpu\d+/ && $moniek{$_} < 0.10, keys %moniek) . " ";
     }
 
     $bar .= "%{B-}%{F-}";
@@ -487,14 +385,12 @@ outer: for (;;) {
         my @m = map { $_->{name} } @monitors;
         print $panel "%{Sf}";
         foreach my $mon (@{$report{monitors}}{@m}) {
-        #foreach my $mon (reverse @{$report{monitors}}{@m}) {
             print $panel make_bar($mon);
         } continue {
             print $panel "%{S+}";
         }
     }
     print $panel "\n";
-
 }
 
 cleanup;
