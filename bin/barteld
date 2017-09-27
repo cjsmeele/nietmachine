@@ -98,8 +98,11 @@ sub init {
             #-F => "#b7b7b7",
             #-B => "#0c2c2c",
             #-B => "#2f0c1a",
-            -B => "#4f0c1a",
-            -F => "#b7b7b7",
+            #-B => "#4f0c1a", # Red/white
+            #-F => "#b7b7b7", # II
+            #-B => "#500030", # ...
+            -B => "#0c0c0c", # Black&white
+            -F => "#b7b7b7", # II
             #-g => "x18",
             #-g => "x22",
             #-o => 0,
@@ -131,6 +134,7 @@ sub init {
             -f => "Monospace:bold:pixelsize=16",
             -f =>      "Mona:bold:pixelsize=16",
             -o => -1,
+            #'-b'
             #-g => "x16",
             #-f =>  "PxPlus IBM BIOS:pixelsize=16:antialias=false:hinting=false",
             #-f => "Monospace:bold:pixelsize=16",
@@ -156,7 +160,7 @@ sub init {
     my @xrandr = `xrandr`; # This should be faster than parsing `bspc query -T`'s JSON output.
     foreach my $name (@mon_names) {
         my ($xrline) = grep /^\Q$name\E connected/, @xrandr;
-        if ($xrline =~ /^\Q$name\E connected (\S+)/) {
+        if ($xrline =~ /^\Q$name\E connected (?:[a-z]+ )?(\S+)/) {
             push @monitors, { name => $name, parse_geom($1) };
         }
     }
@@ -283,7 +287,8 @@ sub parse_monitor {
 sub parse_moniek {
     local $_ = shift;
 
-    %moniek = map { my ($k,$v) = split /=/; $k => 0+$v } split /:/;
+    #%moniek = map { my ($k,$v) = split /=/; $k => 0+$v } split /:/;
+    %moniek = map { my ($k,$v) = split /=/; $k => $v } split /:/;
 }
 
 sub snackbar {
@@ -294,11 +299,12 @@ sub snackbar {
     my @bars = (' ', qw( ▁ ▄ ▄ █ █ ));
     my %ranges = (
         critical => {
-             0 => "#ff0000", # 0 to 12%
-            12 => "#f0b000",
-            20 => "#d0c000",
-            32 => "#a0d000",
-            70 => "#70d000", # 70% and above.
+            # 0 => "#ff0000", # 0 to 12%
+            #12 => "#f0b000",
+            #20 => "#d0c000",
+            #32 => "#a0d000",
+            #70 => "#70d000", # 70% and above.
+             0 => "-",
         },
     );
 
@@ -310,7 +316,8 @@ sub snackbar {
                 }
                 return "-";
               }->()
-            : $color,
+            #: $color,
+            : '-',
         $bars[$ratio * $#bars + 0.5];
 }
 
@@ -347,7 +354,7 @@ sub make_bar {
         $bar .= "%{c}";
     } else {
         #$bar .= " ";
-        $bar .= "%{F#000000}%{B#aaaaaa}";
+        #$bar .= "%{F#000000}%{B#aaaaaa}";
         $bar .= $mon->{layout} eq "M" ? "↑" : " ";
         my @focused_is;
         $mon->{desks}->[$_]->{focus} && push @focused_is, $_+1
@@ -381,7 +388,7 @@ sub make_bar {
         $indicators .= (snackbar "#00b0d0",  $moniek{$_})  for sort grep /cpu\d+/,   keys %moniek;
         $indicators .= (snackbar "#e0d000",  $moniek{mem}) if exists $moniek{mem};
         $indicators .= (snackbar "critical", $moniek{$_})  for sort grep /^bat\d*$/, keys %moniek;
-        $indicators .= (snackbar "#c9074c",  $moniek{wlan_quality}) if exists $moniek{wlan_quality};
+        #$indicators .= (snackbar "#c9074c",  $moniek{wlan_quality}) if exists $moniek{wlan_quality};
 
         $bar .= "$indicators " if defined $indicators;
 
@@ -394,12 +401,16 @@ sub make_bar {
 
         if (defined $bat and $bat <= 0.12
             and (not exists($moniek{acad}) or not $moniek{acad})) {
-            $statuses .= "%{B#f00}%{F#fff} BAT " . int($bat * 100) . " % %{F-}%{B-} ";
+            $statuses .= "%{B#f00}%{F#fff} ACCU " . int($bat * 100) . " % %{F-}%{B-} ";
         } elsif (exists($moniek{acad}) and $moniek{acad}) {
             #$bar .= "%{B-}%{F#ff0}\N{HIGH VOLTAGE SIGN}%{F-}%{B-} ";
             #$statuses .= "%{B-}%{F#eb0}Ĩ%{F-}%{B-}";
             $statuses .= "Ė";
         }
+
+        #$statuses .= '¥' if exists $moniek{wlan_quality};
+        $statuses .= '¥' if grep /^ip_addr_wlan/, keys %moniek;
+        $statuses .= 'ē' if grep /^ip_addr_eth/,  keys %moniek;
 
         # - music
 
@@ -413,13 +424,14 @@ sub make_bar {
 
         # Clock.
 
-        $bar .= "%{F#000000}%{B#aaaaaa}";
-        #$bar .= " %{F-}%{B-}";
+        #$bar .= "%{F#000000}%{B#aaaaaa}";
+        $bar .= " %{F-}%{B-}";
 
         #my $fcolor = "#2ab9b9";
-        #my $fcolor = "#ffffff";
-        my $fcolor  = "#550000";
-        my $fcolor2 = "#000000";
+        my $fcolor = "#ffffff";
+        #my $fcolor  = "#550000";
+        #my $fcolor  = "#000000";
+        my $fcolor2 = "-";
         #2ab9b9
         #42cfd3
         #128fa3
@@ -475,6 +487,7 @@ outer: for (;;) {
         my @m = map { $_->{name} } @monitors;
         print $panel "%{Sf}";
         foreach my $mon (@{$report{monitors}}{@m}) {
+        #foreach my $mon (reverse @{$report{monitors}}{@m}) {
             print $panel make_bar($mon);
         } continue {
             print $panel "%{S+}";

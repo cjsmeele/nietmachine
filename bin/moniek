@@ -127,24 +127,39 @@ sub get_power_status {
     } grep /^ACAD/i, dir $ps;
 }
 
-sub get_wifi_status {
+#sub get_wifi_status {
+#    if (`iwconfig 2>/dev/null` =~ /^\s+Link Quality=(\d+)\/(\d+)/m) {
+#        # Support just one wireless card for now.
+#        return sprintf "%s=%.4f", "wlan_quality", $1 / $2;
+#    }
+#    return;
+#}
+
+sub get_net_status {
+    my @s;
     if (`iwconfig 2>/dev/null` =~ /^\s+Link Quality=(\d+)\/(\d+)/m) {
         # Support just one wireless card for now.
-        return sprintf "%s=%.4f", "wlan_quality", $1 / $2;
+        push @s, sprintf "%s=%.4f", "wlan_quality", $1 / $2;
     }
-    return;
+    for (qw(wlan0 eth1)) {
+        if (`ip addr show dev $_ 2>/dev/null` =~ /^\s*inet\s+([\d.]+)/m) {
+            push @s, sprintf "%s=%s", "ip_addr_$_", $1;
+        }
+    }
+
+    return join ':', @s;
 }
 
 init;
 
 my %COMPONENT_SETS = (
-    all       => [ \&get_usage_cpu, \&get_usage_mem, \&get_usage_bat, \&get_power_status, \&get_wifi_status ],
-    laptop    => [ \&get_usage_cpu, \&get_usage_mem, \&get_usage_bat, \&get_power_status, \&get_wifi_status ],
+    all       => [ \&get_usage_cpu, \&get_usage_mem, \&get_usage_bat, \&get_power_status, \&get_net_status ],
+    laptop    => [ \&get_usage_cpu, \&get_usage_mem, \&get_usage_bat, \&get_power_status, \&get_net_status ],
     desktop   => [ \&get_usage_cpu, \&get_usage_mem ],
     resources => [ \&get_usage_cpu, \&get_usage_mem ],
-    cpu       => [ \&get_usage_cpu   ],
-    mem       => [ \&get_usage_mem   ],
-    wifi      => [ \&get_wifi_status ],
+    cpu       => [ \&get_usage_cpu  ],
+    mem       => [ \&get_usage_mem  ],
+    net       => [ \&get_net_status ],
     power     => [ \&get_usage_bat, \&get_power_status ],
 );
 
